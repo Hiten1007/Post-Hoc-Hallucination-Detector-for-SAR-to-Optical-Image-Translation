@@ -85,7 +85,7 @@ def main():
     train_dataset = SEN12MS_SegmentationDataset(TRAIN_SPLIT_JSON)
     val_dataset = SEN12MS_SegmentationDataset(VAL_SPLIT_JSON)
     
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, prefetch_factor=2)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, prefetch_factor=2, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
     
     model = get_model(NUM_CLASSES).to(device)
