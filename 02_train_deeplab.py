@@ -42,8 +42,8 @@ class SEN12MS_SegmentationDataset(Dataset):
     def __getitem__(self, idx):
         # Infer Optical (s2) and Land Cover (lc) paths from SAR (s1) path
         s1_path = self.sar_files[idx]
-        s2_path = s1_path.replace('_s1_', '_s2_').replace(os.sep + 's1' + os.sep, os.sep + 's2' + os.sep)
-        lc_path = s1_path.replace('_s1_', '_lc_').replace(os.sep + 's1' + os.sep, os.sep + 'lc' + os.sep)
+        s2_path = s1_path.replace('_s1_', '_s2_').replace('/s1_', '/s2_').replace('\\s1_', '\\s2_')
+        lc_path = s1_path.replace('_s1_', '_lc_').replace('/s1_', '/lc_').replace('\\s1_', '\\lc_')
         
         # Load Optical RGB (Sentinel-2 typically has RGB at bands 4, 3, 2, which is idx 3, 2, 1)
         # Note: If your pre-processed data only has 3 bands, we just take all 3.

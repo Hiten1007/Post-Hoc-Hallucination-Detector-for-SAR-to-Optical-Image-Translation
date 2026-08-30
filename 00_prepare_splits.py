@@ -6,7 +6,7 @@ from pathlib import Path
 
 # --- CONFIGURATION ---
 # Change this to where you extracted the 510GB SEN12MS dataset on your EC2 instance
-DATASET_ROOT = Path("./SEN12MS") 
+DATASET_ROOT = Path("./data/sen12ms") 
 OUTPUT_DIR = Path("./splits")
 random.seed(42) # Fixed seed for thesis reproducibility!
 
@@ -14,7 +14,7 @@ def get_all_rois(base_path):
     """Finds all unique ROI folders in the SEN12MS dataset."""
     rois = []
     print("Scanning dataset for Sentinel-1 files (this may take a minute)...")
-    s1_files = glob.glob(os.path.join(base_path, "**", "s1", "*.tif"), recursive=True)
+    s1_files = glob.glob(os.path.join(base_path, "**", "s1_*", "*.tif"), recursive=True)
     
     roi_dict = {}
     for f in s1_files:

@@ -97,8 +97,8 @@ def main():
             filename = os.path.basename(s1_path)
             fake_rgb_filename = filename.replace('_s1_', '_fake_opt_')
             
-            s2_path = s1_path.replace('_s1_', '_s2_').replace(os.sep + 's1' + os.sep, os.sep + 's2' + os.sep)
-            lc_path = s1_path.replace('_s1_', '_lc_').replace(os.sep + 's1' + os.sep, os.sep + 'lc' + os.sep)
+            s2_path = s1_path.replace('_s1_', '_s2_').replace('/s1_', '/s2_').replace('\\s1_', '\\s2_')
+            lc_path = s1_path.replace('_s1_', '_lc_').replace('/s1_', '/lc_').replace('\\s1_', '\\lc_')
             fake_path = FAKE_OPTICAL_DIR / fake_rgb_filename
             
             if not fake_path.exists():
