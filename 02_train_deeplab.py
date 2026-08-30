@@ -85,12 +85,19 @@ def main():
     train_dataset = SEN12MS_SegmentationDataset(TRAIN_SPLIT_JSON)
     val_dataset = SEN12MS_SegmentationDataset(VAL_SPLIT_JSON)
     
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, prefetch_factor=2)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
     
     model = get_model(NUM_CLASSES).to(device)
+    
+    # Auto-resume logic if laptop dies!
+    if os.path.exists(OUTPUT_MODEL):
+        logging.info(f"Found existing checkpoint {OUTPUT_MODEL}. Resuming training to save time!")
+        model.load_state_dict(torch.load(OUTPUT_MODEL, map_location=device, weights_only=True))
+        
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=255) # Ignore masking if needed
+    scaler = torch.amp.GradScaler('cuda') # ADDED: Mixed Precision Scaler for 3x speedup!
     
     best_val_loss = float('inf')
     
@@ -102,15 +109,19 @@ def main():
         # Use tqdm for progress bar in terminal
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]")
         for opt_imgs, lc_masks in pbar:
-            opt_imgs = opt_imgs.to(device)
-            lc_masks = lc_masks.to(device)
+            opt_imgs = opt_imgs.to(device, non_blocking=True)
+            lc_masks = lc_masks.to(device, non_blocking=True)
             
-            optimizer.zero_grad()
-            outputs = model(opt_imgs)['out']
-            loss = criterion(outputs, lc_masks)
+            optimizer.zero_grad(set_to_none=True) # Faster than standard zero_grad
             
-            loss.backward()
-            optimizer.step()
+            # ADDED: Automatic Mixed Precision (AMP) uses the T4 GPU's Tensor Cores
+            with torch.amp.autocast('cuda'):
+                outputs = model(opt_imgs)['out']
+                loss = criterion(outputs, lc_masks)
+            
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             train_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
