@@ -89,6 +89,7 @@ def main():
     model.eval()
     
     # Tracking dictionaries
+    class_total_gt_pixels = {i: 0 for i in range(NUM_CLASSES)}
     class_total_valid_pixels = {i: 0 for i in range(NUM_CLASSES)}
     class_hallucination_pixels = {i: 0 for i in range(NUM_CLASSES)}
     
@@ -132,6 +133,7 @@ def main():
             # 5. Aggregate Statistics
             for c in range(NUM_CLASSES):
                 class_mask = (gt_mask == c)
+                class_total_gt_pixels[c] += np.sum(class_mask & valid_mask)
                 class_total_valid_pixels[c] += np.sum(valid_baseline & class_mask)
                 class_hallucination_pixels[c] += np.sum(hallucinations & class_mask)
 
@@ -142,15 +144,19 @@ def main():
     
     results = []
     for c in range(NUM_CLASSES):
+        gt = class_total_gt_pixels[c]
         valid = class_total_valid_pixels[c]
         hallucinated = class_hallucination_pixels[c]
         
-        # Calculate rate, guarding against division by zero
+        # Calculate rates, guarding against division by zero
+        detector_acc = (valid / gt * 100) if gt > 0 else 0.0
         rate = (hallucinated / valid * 100) if valid > 0 else 0.0
         
         results.append({
             "Class ID": c,
             "Land Cover Type": CLASS_NAMES[c] if c < len(CLASS_NAMES) else f"Unknown ({c})",
+            "Total GT Pixels": gt,
+            "Detector Baseline Acc (%)": round(detector_acc, 2),
             "Valid Audited Pixels": valid,
             "Hallucinated Pixels": hallucinated,
             "Hallucination Rate (%)": round(rate, 2)
