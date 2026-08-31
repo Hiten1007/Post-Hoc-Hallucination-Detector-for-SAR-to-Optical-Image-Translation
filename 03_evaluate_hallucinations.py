@@ -84,7 +84,7 @@ def main():
 
     # Load Fine-tuned DeepLabV3
     model = deeplabv3_resnet50(weights=None, num_classes=NUM_CLASSES)
-    model.load_state_dict(torch.load(DEEPLAB_WEIGHTS, map_location=device, weights_only=True))
+    model.load_state_dict(torch.load(DEEPLAB_WEIGHTS, map_location=device, weights_only=True), strict=False)
     model.to(device)
     model.eval()
     
