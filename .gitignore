@@ -1,1 +1,4 @@
-*.md
+*.md*.pth
+fake_optical_test_set/
+training_progress_images/
+__pycache__/
