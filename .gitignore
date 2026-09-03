@@ -1,4 +1,9 @@
-*.md*.pth
+*.pth
 fake_optical_test_set/
+fake_optical_test_set_pix2pix/
+fake_optical_test_set_cyclegan/
+fake_optical_test_set_palette/
 training_progress_images/
+training_progress_images_cyclegan/
+training_progress_images_palette/
 __pycache__/

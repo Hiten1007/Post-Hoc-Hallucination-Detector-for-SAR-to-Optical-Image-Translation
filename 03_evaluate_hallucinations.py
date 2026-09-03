@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import argparse
 import rasterio
 import numpy as np
 import pandas as pd
@@ -11,12 +12,19 @@ from pathlib import Path
 from tqdm import tqdm
 from scipy.ndimage import binary_dilation
 
+# --- ARGUMENT PARSING ---
+parser = argparse.ArgumentParser(description="Hallucination Benchmark Evaluation")
+parser.add_argument("--model", type=str, default="pix2pix", choices=["pix2pix", "cyclegan", "palette"],
+                    help="Which generator's fake images to evaluate. Default: pix2pix")
+args = parser.parse_args()
+
 # --- CONFIGURATION ---
+MODEL_NAME = args.model
 TEST_SPLIT_JSON = "./splits/test_files.json"
-FAKE_OPTICAL_DIR = Path("./fake_optical_test_set")
+FAKE_OPTICAL_DIR = Path(f"./fake_optical_test_set_{MODEL_NAME}")
 DEEPLAB_WEIGHTS = "deeplabv3_finetuned.pth"
-LOG_FILE = "hallucination_evaluation.log"
-CSV_OUTPUT = "hallucination_benchmark.csv"
+LOG_FILE = f"hallucination_evaluation_{MODEL_NAME}.log"
+CSV_OUTPUT = f"hallucination_benchmark_{MODEL_NAME}.csv"
 
 NUM_CLASSES = 17
 EROSION_RADIUS = 2 # Excludes a 2-pixel margin around class boundaries to prevent false positives
@@ -76,7 +84,7 @@ def load_rgb_tensor(path):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Starting Hallucination Audit Pipeline on {device}")
+    logging.info(f"Starting Hallucination Audit Pipeline on {device} for model: [{MODEL_NAME.upper()}]")
     logging.info("Applying Double-Condition Filter with 2-pixel morphological boundary exclusion.")
     
     with open(TEST_SPLIT_JSON, "r") as f:
