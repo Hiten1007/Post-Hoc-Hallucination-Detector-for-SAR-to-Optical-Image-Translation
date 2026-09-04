@@ -19,7 +19,7 @@ CHECKPOINT_FILE = "pix2pix_checkpoint.pth"
 FINAL_MODEL = "pix2pix_gen_global.pth"
 OUTPUT_IMAGES = Path("./training_progress_images")
 
-EPOCHS = 20
+EPOCHS = 30
 BATCH_SIZE = 16
 LR = 0.0002
 B1 = 0.5
