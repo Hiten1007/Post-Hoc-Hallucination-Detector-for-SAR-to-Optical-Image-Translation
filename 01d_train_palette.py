@@ -34,12 +34,12 @@ BEST_MODEL = "palette_gen_best.pth"
 OUTPUT_IMAGES = Path("./training_progress_images_palette")
 
 EPOCHS = 30
-BATCH_SIZE = 8   # Diffusion models use more VRAM for the UNet
-LR = 1e-4        # Lower LR than GANs (standard for diffusion)
-T = 1000         # Number of diffusion timesteps (standard)
+BATCH_SIZE = 16   # Increased from 8 — if OOM, drop back to 8
+LR = 1e-4         # Lower LR than GANs (standard for diffusion)
+T = 1000          # Number of diffusion timesteps (standard)
 BETA_START = 1e-4
 BETA_END = 0.02
-INFERENCE_STEPS = 50  # DDIM-style fast sampling for validation images
+INFERENCE_STEPS = 10  # Reduced from 50 — faster validation visuals, no impact on training quality
 
 os.makedirs(OUTPUT_IMAGES, exist_ok=True)
 logging.basicConfig(
