@@ -7,3 +7,11 @@ training_progress_images/
 training_progress_images_cyclegan/
 training_progress_images_palette/
 __pycache__/
+data/
+worldcover_tiles/
+legacy/
+training_progress_images_pix2pix/
+training_progress_images_cyclegan/
+training_progress_images_palette/
+deeplab_worldcover_training.log
+*.pth
