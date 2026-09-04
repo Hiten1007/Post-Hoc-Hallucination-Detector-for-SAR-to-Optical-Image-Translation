@@ -99,8 +99,9 @@ def main():
         test_sar_files = json.load(f)
 
     # Load WorldCover-trained DeepLabV3
+    # strict=False: ignores aux_classifier weights saved during training (not needed for inference)
     model = get_model(NUM_CLASSES)
-    model.load_state_dict(torch.load(DEEPLAB_WEIGHTS, map_location=device, weights_only=True))
+    model.load_state_dict(torch.load(DEEPLAB_WEIGHTS, map_location=device, weights_only=True), strict=False)
     model.to(device)
     model.eval()
 
