@@ -241,8 +241,9 @@ def q_sample(x_start, t, diffusion_params, noise=None):
     if noise is None:
         noise = torch.randn_like(x_start)
 
-    sqrt_alphas_cumprod_t = diffusion_params['sqrt_alphas_cumprod'][t][:, None, None, None].to(x_start.device)
-    sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t][:, None, None, None].to(x_start.device)
+    t_cpu = t.cpu()  # diffusion schedule tensors are on CPU; index with CPU t
+    sqrt_alphas_cumprod_t = diffusion_params['sqrt_alphas_cumprod'][t_cpu][:, None, None, None].to(x_start.device)
+    sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t_cpu][:, None, None, None].to(x_start.device)
 
     return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_t * noise
 
