@@ -30,9 +30,10 @@ TRAIN_SPLIT_JSON = "./splits/train_files.json"
 VAL_SPLIT_JSON = "./splits/val_files.json"
 CHECKPOINT_FILE = "palette_checkpoint.pth"
 FINAL_MODEL = "palette_gen_global.pth"
+BEST_MODEL = "palette_gen_best.pth"
 OUTPUT_IMAGES = Path("./training_progress_images_palette")
 
-EPOCHS = 20
+EPOCHS = 30
 BATCH_SIZE = 8   # Diffusion models use more VRAM for the UNet
 LR = 1e-4        # Lower LR than GANs (standard for diffusion)
 T = 1000         # Number of diffusion timesteps (standard)
@@ -41,7 +42,14 @@ BETA_END = 0.02
 INFERENCE_STEPS = 50  # DDIM-style fast sampling for validation images
 
 os.makedirs(OUTPUT_IMAGES, exist_ok=True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.FileHandler("palette_training.log"),
+        logging.StreamHandler()
+    ]
+)
 
 
 # ============================
@@ -319,6 +327,8 @@ def main():
         start_epoch = ckpt['epoch'] + 1
         logging.info(f"Resuming from Epoch {start_epoch + 1}")
 
+    best_val_loss = float('inf')
+
     for epoch in range(start_epoch, EPOCHS):
         model.train()
         total_loss = 0.0
@@ -377,11 +387,18 @@ def main():
             'scaler': scaler.state_dict(),
         }
         torch.save(ckpt, CHECKPOINT_FILE)
-        logging.info("Checkpoint saved safely.")
 
-    # Export the final denoiser model for the inference/hallucination pipeline
+        # --- SAVE BEST MODEL (lowest validation noise loss) ---
+        if avg_loss < best_val_loss:
+            best_val_loss = avg_loss
+            torch.save(model.state_dict(), BEST_MODEL)
+            logging.info(f"New best model saved at Epoch {epoch + 1}! Val Loss: {best_val_loss:.6f} -> {BEST_MODEL}")
+        else:
+            logging.info("Checkpoint saved safely.")
+
+    # Export the final epoch weights (for comparison against best)
     torch.save(model.state_dict(), FINAL_MODEL)
-    logging.info(f"Training finished! Palette denoiser saved to {FINAL_MODEL}")
+    logging.info(f"Training finished! Final model: {FINAL_MODEL} | Best model: {BEST_MODEL} (lowest val loss: {best_val_loss:.6f})")
 
 
 if __name__ == "__main__":

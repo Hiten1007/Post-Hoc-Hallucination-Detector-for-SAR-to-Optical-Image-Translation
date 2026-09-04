@@ -27,9 +27,10 @@ TRAIN_SPLIT_JSON = "./splits/train_files.json"
 VAL_SPLIT_JSON = "./splits/val_files.json"
 CHECKPOINT_FILE = "cyclegan_checkpoint.pth"
 FINAL_MODEL = "cyclegan_gen_global.pth"
+BEST_MODEL = "cyclegan_gen_best.pth"
 OUTPUT_IMAGES = Path("./training_progress_images_cyclegan")
 
-EPOCHS = 20
+EPOCHS = 30
 BATCH_SIZE = 4  # CycleGAN uses 4 generators/discriminators, needs more VRAM per batch
 LR = 0.0002
 B1 = 0.5
@@ -38,7 +39,14 @@ LAMBDA_CYCLE = 10.0   # Cycle consistency weight
 LAMBDA_IDENTITY = 5.0 # Identity loss weight (helps preserve color)
 
 os.makedirs(OUTPUT_IMAGES, exist_ok=True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.FileHandler("cyclegan_training.log"),
+        logging.StreamHandler()
+    ]
+)
 
 # ============================
 # MODEL ARCHITECTURES
@@ -262,6 +270,8 @@ def main():
         start_epoch = ckpt['epoch'] + 1
         logging.info(f"Resuming from Epoch {start_epoch + 1}")
 
+    best_val_loss = float('inf')
+
     for epoch in range(start_epoch, EPOCHS):
         G_AB.train(); G_BA.train()
         D_A.train(); D_B.train()
@@ -380,11 +390,18 @@ def main():
             'scaler_D_B': scaler_D_B.state_dict(),
         }
         torch.save(ckpt, CHECKPOINT_FILE)
-        logging.info("Checkpoint saved safely (All CycleGAN components).")
 
-    # Export the SAR->Optical generator weights for the hallucination pipeline
+        # --- SAVE BEST MODEL (lowest val L1 loss) ---
+        if val_l1_loss < best_val_loss:
+            best_val_loss = val_l1_loss
+            torch.save(G_AB.state_dict(), BEST_MODEL)
+            logging.info(f"New best model saved at Epoch {epoch + 1}! Val L1: {best_val_loss:.4f} -> {BEST_MODEL}")
+        else:
+            logging.info("Checkpoint saved safely (All CycleGAN components).")
+
+    # Export the final epoch SAR->Optical generator (for comparison against best)
     torch.save(G_AB.state_dict(), FINAL_MODEL)
-    logging.info(f"Training finished! SAR->Optical generator saved to {FINAL_MODEL}")
+    logging.info(f"Training finished! Final model: {FINAL_MODEL} | Best model: {BEST_MODEL} (lowest val L1: {best_val_loss:.4f})")
 
 
 if __name__ == "__main__":
