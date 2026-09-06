@@ -18,6 +18,8 @@ import rasterio
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
+from torch.utils.data import Dataset, DataLoader
+from concurrent.futures import ThreadPoolExecutor
 
 # Import Pix2Pix generator from the existing models.py
 from models import GeneratorUNet
@@ -205,7 +207,8 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=100):
     for t_val in timesteps:
         t = torch.full((b,), t_val, device=device, dtype=torch.long)
         model_input = torch.cat([img, sar], dim=1)
-        predicted_noise = model(model_input, t)
+        with torch.amp.autocast('cuda'):
+            predicted_noise = model(model_input, t)
         betas_t = diffusion_params['betas'][t_val].to(device)
         sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t_val].to(device)
         sqrt_recip_t = diffusion_params['sqrt_recip_alphas'][t_val].to(device)
@@ -221,6 +224,49 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=100):
 
 
 # ============================
+# DATASET & WRITER
+# ============================
+
+class TestSARDataset(Dataset):
+    def __init__(self, s1_paths, output_dir):
+        self.items = []
+        for p in s1_paths:
+            filename = os.path.basename(p)
+            out_filename = filename.replace('_s1_', '_fake_opt_')
+            out_path = output_dir / out_filename
+            if not out_path.exists():
+                self.items.append((p, str(out_path)))
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        s1_path, out_path = self.items[idx]
+        with rasterio.open(s1_path) as src:
+            sar = src.read().astype(np.float32)
+            crs_wkt = src.crs.to_wkt() if src.crs else ""
+            transform = list(src.transform)[:6]
+        return torch.from_numpy(sar), out_path, crs_wkt, torch.tensor(transform, dtype=torch.float64)
+
+
+def _save_single_patch(item):
+    fake_img, out_path_str, crs_wkt, transform_vals = item
+    affine = rasterio.Affine(*transform_vals)
+    kwargs = {
+        'driver': 'GTiff',
+        'height': 256,
+        'width': 256,
+        'count': 3,
+        'dtype': 'uint16',
+        'transform': affine
+    }
+    if crs_wkt:
+        kwargs['crs'] = crs_wkt
+    with rasterio.open(out_path_str, 'w', **kwargs) as dst:
+        dst.write(fake_img)
+
+
+# ============================
 # MAIN GENERATION LOGIC
 # ============================
 
@@ -232,6 +278,10 @@ def main():
                         help="Path to weights file. If not specified, uses default for the model.")
     parser.add_argument("--inference-steps", type=int, default=100,
                         help="Number of denoising steps for Palette (ignored for GAN models).")
+    parser.add_argument("--batch-size", type=int, default=16,
+                        help="Batch size for parallel inference (default: 16).")
+    parser.add_argument("--num-workers", type=int, default=8,
+                        help="Number of DataLoader worker processes (default: 8).")
     args = parser.parse_args()
 
     # Default weight paths
@@ -249,10 +299,28 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Generating fake optical images using [{args.model.upper()}] on {device}")
     print(f"Loading weights from: {weights_path}")
+    print(f"Config: Batch Size = {args.batch_size}, Workers = {args.num_workers}, Palette Steps = {args.inference_steps}")
 
     # Load test split
     with open("./splits/test_files.json", "r") as f:
         test_files = json.load(f)
+
+    dataset = TestSARDataset(test_files, output_dir)
+    already_done = len(test_files) - len(dataset)
+    print(f"Total test patches: {len(test_files)} | Already completed: {already_done} | Remaining to generate: {len(dataset)}")
+
+    if len(dataset) == 0:
+        print(f"All {len(test_files)} fake optical images already generated in {output_dir}!")
+        return
+
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if args.num_workers > 0 else None
+    )
 
     # Load the appropriate model
     if args.model == "pix2pix":
@@ -272,39 +340,34 @@ def main():
         betas = linear_beta_schedule(1000)
         diffusion_params = get_diffusion_params(betas)
 
-    # Generate fake optical images for every test SAR file
+    writer_pool = ThreadPoolExecutor(max_workers=args.num_workers)
+
     with torch.no_grad():
-        for s1_path in tqdm(test_files, desc=f"Generating [{args.model}] fakes"):
-            filename = os.path.basename(s1_path)
-            out_filename = filename.replace('_s1_', '_fake_opt_')
-            out_path = output_dir / out_filename
+        for sar_batch, out_paths, crs_wkts, transforms in tqdm(loader, desc=f"Generating [{args.model}] fakes"):
+            sar_batch = sar_batch.to(device, non_blocking=True)
 
-            if out_path.exists():
-                continue  # Skip already generated files (resume-safe)
-
-            # Load SAR image
-            with rasterio.open(s1_path) as src:
-                sar = src.read().astype(np.float32)
-                profile = src.profile.copy()
-
-            sar_tensor = torch.from_numpy(sar).unsqueeze(0).to(device)
-
-            # Generate fake optical
             if args.model in ("pix2pix", "cyclegan"):
-                fake_opt = generator(sar_tensor).squeeze(0).cpu().numpy()
+                with torch.amp.autocast('cuda'):
+                    fake_opt = generator(sar_batch)
             elif args.model == "palette":
-                fake_opt = palette_sample(generator, sar_tensor, diffusion_params, device,
-                                          num_steps=args.inference_steps).squeeze(0).cpu().numpy()
+                fake_opt = palette_sample(generator, sar_batch, diffusion_params, device,
+                                          num_steps=args.inference_steps)
 
-            # Scale back to uint16 range [0, 10000] to match real S2 data format
-            fake_opt = (fake_opt * 10000.0).clip(0, 65535).astype(np.uint16)
+            fake_opt_np = (fake_opt * 10000.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
 
-            # Write output .tif
-            profile.update(count=3, dtype='uint16')
-            with rasterio.open(out_path, 'w', **profile) as dst:
-                dst.write(fake_opt)
+            save_tasks = []
+            for i in range(sar_batch.size(0)):
+                save_tasks.append((
+                    fake_opt_np[i],
+                    out_paths[i],
+                    crs_wkts[i],
+                    transforms[i].tolist()
+                ))
 
-    print(f"\nDone! {len(test_files)} fake optical images saved to: {output_dir}")
+            list(writer_pool.map(_save_single_patch, save_tasks))
+
+    writer_pool.shutdown()
+    print(f"\nDone! All fake optical images saved to: {output_dir}")
 
 
 if __name__ == "__main__":
