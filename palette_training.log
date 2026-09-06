@@ -1,0 +1,64 @@
+2026-09-04 07:44:40,962 - Starting Palette (Conditional DDPM) Training on cuda
+2026-09-04 07:46:17,742 - Starting Palette (Conditional DDPM) Training on cuda
+2026-09-04 07:49:59,868 - Starting Palette (Conditional DDPM) Training on cuda
+2026-09-04 10:36:54,728 - Epoch 1 Complete. Average MSE Loss: nan
+2026-09-04 10:36:59,004 - Checkpoint saved safely.
+2026-09-04 13:24:29,030 - Epoch 2 Complete. Average MSE Loss: 0.002712
+2026-09-04 13:24:41,532 - New best model saved at Epoch 2! Val Loss: 0.002712 -> palette_gen_best.pth
+2026-09-04 14:51:54,528 - Epoch 3 Complete. Average MSE Loss: 0.001989
+2026-09-04 14:52:00,734 - New best model saved at Epoch 3! Val Loss: 0.001989 -> palette_gen_best.pth
+2026-09-04 16:08:12,653 - Epoch 4 Complete. Average MSE Loss: 0.001610
+2026-09-04 16:08:18,869 - New best model saved at Epoch 4! Val Loss: 0.001610 -> palette_gen_best.pth
+2026-09-04 17:46:16,396 - Epoch 5 Complete. Average MSE Loss: 0.001523
+2026-09-04 17:46:22,608 - New best model saved at Epoch 5! Val Loss: 0.001523 -> palette_gen_best.pth
+2026-09-04 19:02:32,224 - Epoch 6 Complete. Average MSE Loss: 0.001440
+2026-09-04 19:02:38,449 - New best model saved at Epoch 6! Val Loss: 0.001440 -> palette_gen_best.pth
+2026-09-04 20:18:45,524 - Epoch 7 Complete. Average MSE Loss: 0.001390
+2026-09-04 20:18:51,743 - New best model saved at Epoch 7! Val Loss: 0.001390 -> palette_gen_best.pth
+2026-09-04 21:35:01,934 - Epoch 8 Complete. Average MSE Loss: 0.001335
+2026-09-04 21:35:08,152 - New best model saved at Epoch 8! Val Loss: 0.001335 -> palette_gen_best.pth
+2026-09-04 22:51:18,931 - Epoch 9 Complete. Average MSE Loss: 0.001298
+2026-09-04 22:51:25,157 - New best model saved at Epoch 9! Val Loss: 0.001298 -> palette_gen_best.pth
+2026-09-05 00:07:38,587 - Epoch 10 Complete. Average MSE Loss: 0.001269
+2026-09-05 00:07:44,804 - New best model saved at Epoch 10! Val Loss: 0.001269 -> palette_gen_best.pth
+2026-09-05 01:23:55,502 - Epoch 11 Complete. Average MSE Loss: 0.001292
+2026-09-05 01:24:00,634 - Checkpoint saved safely.
+2026-09-05 02:40:12,638 - Epoch 12 Complete. Average MSE Loss: 0.001247
+2026-09-05 02:40:18,859 - New best model saved at Epoch 12! Val Loss: 0.001247 -> palette_gen_best.pth
+2026-09-05 03:56:32,781 - Epoch 13 Complete. Average MSE Loss: 0.001207
+2026-09-05 03:56:39,022 - New best model saved at Epoch 13! Val Loss: 0.001207 -> palette_gen_best.pth
+2026-09-05 05:12:56,726 - Epoch 14 Complete. Average MSE Loss: 0.001226
+2026-09-05 05:13:01,865 - Checkpoint saved safely.
+2026-09-05 06:29:21,058 - Epoch 15 Complete. Average MSE Loss: 0.001195
+2026-09-05 06:29:27,281 - New best model saved at Epoch 15! Val Loss: 0.001195 -> palette_gen_best.pth
+2026-09-05 07:45:43,591 - Epoch 16 Complete. Average MSE Loss: 0.001196
+2026-09-05 07:45:48,730 - Checkpoint saved safely.
+2026-09-05 09:02:10,941 - Epoch 17 Complete. Average MSE Loss: 0.001159
+2026-09-05 09:02:17,169 - New best model saved at Epoch 17! Val Loss: 0.001159 -> palette_gen_best.pth
+2026-09-05 10:18:38,907 - Epoch 18 Complete. Average MSE Loss: 0.001168
+2026-09-05 10:18:44,046 - Checkpoint saved safely.
+2026-09-05 11:35:03,226 - Epoch 19 Complete. Average MSE Loss: 0.001113
+2026-09-05 11:35:09,451 - New best model saved at Epoch 19! Val Loss: 0.001113 -> palette_gen_best.pth
+2026-09-05 12:51:31,856 - Epoch 20 Complete. Average MSE Loss: 0.001172
+2026-09-05 12:51:36,994 - Checkpoint saved safely.
+2026-09-05 14:07:57,960 - Epoch 21 Complete. Average MSE Loss: 0.001143
+2026-09-05 14:08:03,100 - Checkpoint saved safely.
+2026-09-05 15:24:20,286 - Epoch 22 Complete. Average MSE Loss: 0.001128
+2026-09-05 15:24:25,430 - Checkpoint saved safely.
+2026-09-05 16:40:45,106 - Epoch 23 Complete. Average MSE Loss: 0.001137
+2026-09-05 16:40:50,250 - Checkpoint saved safely.
+2026-09-05 17:56:59,850 - Epoch 24 Complete. Average MSE Loss: 0.001125
+2026-09-05 17:57:04,977 - Checkpoint saved safely.
+2026-09-05 19:13:18,568 - Epoch 25 Complete. Average MSE Loss: 0.001119
+2026-09-05 19:13:23,698 - Checkpoint saved safely.
+2026-09-05 20:29:40,833 - Epoch 26 Complete. Average MSE Loss: 0.001123
+2026-09-05 20:29:45,967 - Checkpoint saved safely.
+2026-09-05 21:46:04,931 - Epoch 27 Complete. Average MSE Loss: 0.001093
+2026-09-05 21:46:11,165 - New best model saved at Epoch 27! Val Loss: 0.001093 -> palette_gen_best.pth
+2026-09-05 23:02:28,803 - Epoch 28 Complete. Average MSE Loss: 0.001096
+2026-09-05 23:02:33,936 - Checkpoint saved safely.
+2026-09-06 00:18:48,823 - Epoch 29 Complete. Average MSE Loss: 0.001122
+2026-09-06 00:18:53,973 - Checkpoint saved safely.
+2026-09-06 01:35:07,504 - Epoch 30 Complete. Average MSE Loss: 0.001101
+2026-09-06 01:35:12,641 - Checkpoint saved safely.
+2026-09-06 01:35:12,808 - Training finished! Final model: palette_gen_global.pth | Best model: palette_gen_best.pth (lowest val loss: 0.001093)
