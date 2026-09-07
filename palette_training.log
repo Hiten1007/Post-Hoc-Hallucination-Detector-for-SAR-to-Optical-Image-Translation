@@ -62,3 +62,7 @@
 2026-09-06 01:35:07,504 - Epoch 30 Complete. Average MSE Loss: 0.001101
 2026-09-06 01:35:12,641 - Checkpoint saved safely.
 2026-09-06 01:35:12,808 - Training finished! Final model: palette_gen_global.pth | Best model: palette_gen_best.pth (lowest val loss: 0.001093)
+2026-09-07 03:03:01,667 - Starting Palette (Conditional DDPM) Training on cuda
+2026-09-07 03:03:02,148 - Found checkpoint palette_checkpoint.pth. Restoring ALL states to safely resume...
+2026-09-07 03:03:04,431 - Resuming from Epoch 31
+2026-09-07 03:03:05,484 - Training finished! Final model: palette_gen_global.pth | Best model: palette_gen_best.pth (lowest val loss: inf)
