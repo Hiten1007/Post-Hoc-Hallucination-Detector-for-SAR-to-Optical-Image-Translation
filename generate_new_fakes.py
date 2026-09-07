@@ -240,7 +240,7 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50, g
             img = pred_x0
         else:
             # Step 2: DDIM deterministic update toward x_{t_prev}
-            t_prev_val = timesteps[idx + 1] if idx + 1 < len(timesteps) else 0
+            t_prev_val = timesteps[idx + 1]
             alpha_t_prev = alphas_cumprod[t_prev_val]
             img = torch.sqrt(alpha_t_prev) * pred_x0 + torch.sqrt(1.0 - alpha_t_prev) * predicted_noise
 
@@ -292,7 +292,8 @@ def _save_single_patch(item):
         'width': 256,
         'count': 3,
         'dtype': 'uint16',
-        'transform': affine
+        'transform': affine,
+        'compress': 'deflate'
     }
     if crs_wkt:
         kwargs['crs'] = crs_wkt
@@ -378,12 +379,13 @@ def main():
         betas = linear_beta_schedule(1000)
         diffusion_params = get_diffusion_params(betas)
 
-    writer_pool = ThreadPoolExecutor(max_workers=args.num_workers)
+    # Guard against max_workers=0 if num_workers=0 is passed
+    writer_pool = ThreadPoolExecutor(max_workers=max(1, args.num_workers))
 
     with torch.no_grad():
         for sar_batch, out_paths, crs_wkts, transforms in tqdm(loader, desc=f"Generating [{args.model}] fakes"):
             sar_batch = sar_batch.to(device, non_blocking=True)
-            assert sar_batch.shape[1] == 2, f"Expected 2 SAR channels (VV, VH), got {sar_batch.shape[1]}"
+            assert sar_batch.shape[1] == 2, f"Expected 2 SAR condition channels (VV, VH), got {sar_batch.shape[1]}"
 
             if args.model in ("pix2pix", "cyclegan"):
                 with torch.amp.autocast(device.type):
@@ -422,6 +424,14 @@ def main():
                     list(writer_pool.map(_save_single_patch, save_tasks))
                 except Exception as e:
                     print(f"[ERROR] Failed writing batch GeoTIFFs: {e}")
+                    # Clean up any partial files from this failed batch so they are not treated as done
+                    for _, out_p, _, _ in save_tasks:
+                        if os.path.exists(out_p):
+                            try:
+                                os.remove(out_p)
+                            except OSError:
+                                pass
+                    raise e
 
     writer_pool.shutdown()
     print(f"\nDone! All fake optical images saved to: {output_dir}")
