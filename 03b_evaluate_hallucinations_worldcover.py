@@ -24,11 +24,16 @@ from pathlib import Path
 from tqdm import tqdm
 from scipy.ndimage import binary_dilation
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 
 # --- ARGUMENT PARSING ---
 parser = argparse.ArgumentParser(description="WorldCover Hallucination Benchmark")
 parser.add_argument("--model", type=str, default="pix2pix", choices=["pix2pix", "cyclegan", "palette"],
                     help="Which generator's fake images to evaluate.")
+parser.add_argument("--batch-size", type=int, default=16,
+                    help="Batch size for parallel evaluation (default: 16).")
+parser.add_argument("--num-workers", type=int, default=8,
+                    help="Number of DataLoader worker processes (default: 8).")
 args = parser.parse_args()
 
 # --- CONFIGURATION ---
@@ -67,7 +72,7 @@ def get_boundary_mask(label_mask, radius=2):
     return ~exclusion_zone
 
 
-def load_rgb_tensor(path):
+def read_rgb(path):
     with rasterio.open(path) as src:
         img = src.read()
         if img.shape[0] == 13:
@@ -78,7 +83,32 @@ def load_rgb_tensor(path):
             img = img.astype(np.float32) / 10000.0
         else:
             img = img.astype(np.float32) / 255.0
-    return torch.from_numpy(img).unsqueeze(0)
+    return img
+
+
+class HallucinationEvalDataset(Dataset):
+    def __init__(self, s1_paths, fake_dir):
+        self.valid_items = []
+        for s1_path in s1_paths:
+            filename = os.path.basename(s1_path)
+            fake_rgb_filename = filename.replace('_s1_', '_fake_opt_')
+            s2_path = s1_path.replace('_s1_', '_s2_').replace('/s1_', '/s2_').replace('\\s1_', '\\s2_')
+            wc_path = s1_path.replace('_s1_', '_wc_').replace('/s1_', '/wc_').replace('\\s1_', '\\wc_')
+            fake_path = fake_dir / fake_rgb_filename
+
+            if fake_path.exists() and os.path.exists(wc_path) and os.path.exists(s2_path):
+                self.valid_items.append((s2_path, str(fake_path), wc_path))
+
+    def __len__(self):
+        return len(self.valid_items)
+
+    def __getitem__(self, idx):
+        s2_path, fake_path, wc_path = self.valid_items[idx]
+        real_img = read_rgb(s2_path)
+        fake_img = read_rgb(fake_path)
+        with rasterio.open(wc_path) as src:
+            gt_mask = src.read(1).astype(np.int64)
+        return torch.from_numpy(real_img), torch.from_numpy(fake_img), torch.from_numpy(gt_mask)
 
 
 def get_model(num_classes):
@@ -93,6 +123,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Starting WorldCover Hallucination Audit on {device} for model: [{MODEL_NAME.upper()}]")
     logging.info(f"Using 10m WorldCover ground truth ({NUM_CLASSES} classes)")
+    logging.info(f"Config: Batch Size = {args.batch_size}, Workers = {args.num_workers}")
     logging.info("Applying Double-Condition Filter with 2-pixel morphological boundary exclusion.")
 
     with open(TEST_SPLIT_JSON, "r") as f:
@@ -105,57 +136,61 @@ def main():
     model.to(device)
     model.eval()
 
+    # Create Dataset and multi-worker DataLoader
+    dataset = HallucinationEvalDataset(test_sar_files, FAKE_OPTICAL_DIR)
+    logging.info(f"Total auditable test patches found: {len(dataset)}")
+
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if args.num_workers > 0 else None
+    )
+
     # Tracking dictionaries
     class_total_gt_pixels = {i: 0 for i in range(NUM_CLASSES)}
     class_total_valid_pixels = {i: 0 for i in range(NUM_CLASSES)}
     class_hallucination_pixels = {i: 0 for i in range(NUM_CLASSES)}
 
     with torch.no_grad():
-        for s1_path in tqdm(test_sar_files, desc="Auditing Hallucinations (WorldCover)"):
-            filename = os.path.basename(s1_path)
-            fake_rgb_filename = filename.replace('_s1_', '_fake_opt_')
+        for real_batch, fake_batch, gt_batch in tqdm(loader, desc=f"Auditing Hallucinations ({MODEL_NAME})"):
+            real_batch = real_batch.to(device, non_blocking=True)
+            fake_batch = fake_batch.to(device, non_blocking=True)
 
-            s2_path = s1_path.replace('_s1_', '_s2_').replace('/s1_', '/s2_').replace('\\s1_', '\\s2_')
-            wc_path = s1_path.replace('_s1_', '_wc_').replace('/s1_', '/wc_').replace('\\s1_', '\\wc_')
-            fake_path = FAKE_OPTICAL_DIR / fake_rgb_filename
+            with torch.amp.autocast('cuda'):
+                pred_real_batch = model(real_batch)['out'].argmax(1).cpu().numpy()
+                pred_fake_batch = model(fake_batch)['out'].argmax(1).cpu().numpy()
 
-            if not fake_path.exists() or not os.path.exists(wc_path):
-                continue
+            gt_batch_np = gt_batch.numpy()
 
-            # 1. Load Data
-            real_rgb = load_rgb_tensor(s2_path).to(device)
-            fake_rgb = load_rgb_tensor(fake_path).to(device)
+            for i in range(real_batch.size(0)):
+                gt_mask = gt_batch_np[i]
 
-            with rasterio.open(wc_path) as src:
-                gt_mask = src.read(1).astype(np.int64)
-                # WorldCover labels are already 0-indexed (0-10), no need to subtract 1
+                # Skip patches where all labels are 255 (unmapped)
+                if np.all(gt_mask == 255):
+                    continue
 
-            # Skip patches where all labels are 255 (unmapped)
-            if np.all(gt_mask == 255):
-                continue
+                pred_real = pred_real_batch[i]
+                pred_fake = pred_fake_batch[i]
 
-            # 2. Get DeepLab Predictions
-            pred_real = model(real_rgb)['out'].argmax(1).squeeze().cpu().numpy()
-            pred_fake = model(fake_rgb)['out'].argmax(1).squeeze().cpu().numpy()
+                # 3. Create morphological exclusion mask
+                valid_mask = get_boundary_mask(gt_mask, radius=EROSION_RADIUS)
+                valid_mask = valid_mask & (gt_mask != 255)
 
-            # 3. Create morphological exclusion mask
-            valid_mask = get_boundary_mask(gt_mask, radius=EROSION_RADIUS)
+                # 4. Apply the Double-Condition Filter
+                cond_1 = (pred_real == gt_mask)
+                cond_2 = (pred_fake != gt_mask)
+                hallucinations = cond_1 & cond_2 & valid_mask
+                valid_baseline = cond_1 & valid_mask
 
-            # Also exclude any pixels with label 255 (unmapped)
-            valid_mask = valid_mask & (gt_mask != 255)
-
-            # 4. Apply the Double-Condition Filter
-            cond_1 = (pred_real == gt_mask)
-            cond_2 = (pred_fake != gt_mask)
-            hallucinations = cond_1 & cond_2 & valid_mask
-            valid_baseline = cond_1 & valid_mask
-
-            # 5. Aggregate Statistics
-            for c in range(NUM_CLASSES):
-                class_mask = (gt_mask == c)
-                class_total_gt_pixels[c] += np.sum(class_mask & valid_mask)
-                class_total_valid_pixels[c] += np.sum(valid_baseline & class_mask)
-                class_hallucination_pixels[c] += np.sum(hallucinations & class_mask)
+                # 5. Aggregate Statistics
+                for c in range(NUM_CLASSES):
+                    class_mask = (gt_mask == c)
+                    class_total_gt_pixels[c] += int(np.sum(class_mask & valid_mask))
+                    class_total_valid_pixels[c] += int(np.sum(valid_baseline & class_mask))
+                    class_hallucination_pixels[c] += int(np.sum(hallucinations & class_mask))
 
     # 6. Generate the Final Benchmark Table
     logging.info("\n=======================================================")
