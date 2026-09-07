@@ -197,32 +197,42 @@ def get_diffusion_params(betas):
     }
 
 @torch.no_grad()
-def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=100):
-    """Generate optical image from SAR using iterative denoising in stable FP32."""
+def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50):
+    """
+    DDIM deterministic sampling (Song et al., 2020).
+    Mathematically valid for arbitrary step sizes with any DDPM-trained model.
+    No retraining needed. sigma=0 (fully deterministic, no stochastic noise added).
+    """
     b = sar.shape[0]
     img = torch.randn(b, 3, 256, 256, device=device)
+
     step_size = max(1, T // num_steps)
     timesteps = list(range(T - 1, -1, -step_size))
     if timesteps[-1] != 0:
         timesteps.append(0)
 
-    for t_val in timesteps:
+    alphas_cumprod = diffusion_params['alphas_cumprod'].to(device)
+
+    for idx, t_val in enumerate(timesteps):
         t = torch.full((b,), t_val, device=device, dtype=torch.long)
         model_input = torch.cat([img, sar], dim=1)
-        # Execute in FP32 to prevent self-attention dot-product NaN overflow
+
+        # Predict noise at current timestep (FP32 for stability)
         predicted_noise = model(model_input, t)
 
-        betas_t = diffusion_params['betas'][t_val].to(device)
-        sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t_val].to(device)
-        sqrt_recip_t = diffusion_params['sqrt_recip_alphas'][t_val].to(device)
-        model_mean = sqrt_recip_t * (img - betas_t / sqrt_one_minus_t * predicted_noise)
+        alpha_t = alphas_cumprod[t_val]
 
-        if t_val > 0:
-            posterior_var = diffusion_params['posterior_variance'][t_val].to(device)
-            noise = torch.randn_like(img)
-            img = model_mean + torch.sqrt(posterior_var) * noise
+        # Step 1: Recover predicted clean image x_0 from noisy x_t
+        pred_x0 = (img - torch.sqrt(1.0 - alpha_t) * predicted_noise) / torch.sqrt(alpha_t)
+        pred_x0 = pred_x0.clamp(0.0, 1.0)  # Stabilize: optical images are in [0, 1]
+
+        if t_val == 0:
+            img = pred_x0
         else:
-            img = model_mean
+            # Step 2: DDIM deterministic update toward x_{t_prev}
+            t_prev_val = timesteps[idx + 1] if idx + 1 < len(timesteps) else 0
+            alpha_t_prev = alphas_cumprod[t_prev_val]
+            img = torch.sqrt(alpha_t_prev) * pred_x0 + torch.sqrt(1.0 - alpha_t_prev) * predicted_noise
 
     return img.clamp(0.0, 1.0)
 
