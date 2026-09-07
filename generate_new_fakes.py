@@ -357,18 +357,31 @@ def main():
                 fake_opt = palette_sample(generator, sar_batch, diffusion_params, device,
                                           num_steps=args.inference_steps)
 
-            fake_opt_np = (fake_opt * 10000.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
+            # Guard against NaN/Inf from diffusion numerical instability
+            # nan_to_num replaces NaN with 0 before we can detect and skip corrupted images
+            fake_opt_clean = torch.nan_to_num(fake_opt, nan=float('nan'), posinf=1.0, neginf=0.0)
+
+            fake_opt_np = (fake_opt_clean * 10000.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
 
             save_tasks = []
             for i in range(sar_batch.size(0)):
+                patch = fake_opt_np[i]
+                # If NaN corruption produced an all-zero image, delete the file so it can be regenerated
+                if patch.max() == 0:
+                    corrupt_path = out_paths[i]
+                    if os.path.exists(corrupt_path):
+                        os.remove(corrupt_path)
+                    print(f"[WARN] Skipping corrupted all-zero patch: {os.path.basename(corrupt_path)}")
+                    continue
                 save_tasks.append((
-                    fake_opt_np[i],
+                    patch,
                     out_paths[i],
                     crs_wkts[i],
                     transforms[i].tolist()
                 ))
 
-            list(writer_pool.map(_save_single_patch, save_tasks))
+            if save_tasks:
+                list(writer_pool.map(_save_single_patch, save_tasks))
 
     writer_pool.shutdown()
     print(f"\nDone! All fake optical images saved to: {output_dir}")
