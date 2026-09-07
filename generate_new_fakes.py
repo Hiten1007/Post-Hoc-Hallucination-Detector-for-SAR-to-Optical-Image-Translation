@@ -198,21 +198,25 @@ def get_diffusion_params(betas):
 
 @torch.no_grad()
 def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=100):
-    """Generate optical image from SAR using iterative denoising."""
+    """Generate optical image from SAR using iterative denoising in stable FP32."""
     b = sar.shape[0]
     img = torch.randn(b, 3, 256, 256, device=device)
-    step_size = T // num_steps
+    step_size = max(1, T // num_steps)
     timesteps = list(range(T - 1, -1, -step_size))
+    if timesteps[-1] != 0:
+        timesteps.append(0)
 
     for t_val in timesteps:
         t = torch.full((b,), t_val, device=device, dtype=torch.long)
         model_input = torch.cat([img, sar], dim=1)
-        with torch.amp.autocast('cuda'):
-            predicted_noise = model(model_input, t)
+        # Execute in FP32 to prevent self-attention dot-product NaN overflow
+        predicted_noise = model(model_input, t)
+
         betas_t = diffusion_params['betas'][t_val].to(device)
         sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t_val].to(device)
         sqrt_recip_t = diffusion_params['sqrt_recip_alphas'][t_val].to(device)
         model_mean = sqrt_recip_t * (img - betas_t / sqrt_one_minus_t * predicted_noise)
+
         if t_val > 0:
             posterior_var = diffusion_params['posterior_variance'][t_val].to(device)
             noise = torch.randn_like(img)
@@ -220,7 +224,7 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=100):
         else:
             img = model_mean
 
-    return img.clamp(0, 1)
+    return img.clamp(0.0, 1.0)
 
 
 # ============================
