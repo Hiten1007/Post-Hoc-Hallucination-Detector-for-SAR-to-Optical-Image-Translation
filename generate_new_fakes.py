@@ -10,7 +10,6 @@ Usage:
 """
 
 import os
-import sys
 import json
 import argparse
 import torch
@@ -380,60 +379,61 @@ def main():
         diffusion_params = get_diffusion_params(betas)
 
     # Guard against max_workers=0 if num_workers=0 is passed
-    writer_pool = ThreadPoolExecutor(max_workers=max(1, args.num_workers))
+    with ThreadPoolExecutor(max_workers=max(1, args.num_workers)) as writer_pool:
+        with torch.no_grad():
+            for sar_batch, out_paths, crs_wkts, transforms in tqdm(loader, desc=f"Generating [{args.model}] fakes"):
+                sar_batch = sar_batch.to(device, non_blocking=True)
+                # TestSARDataset yields 2-channel SAR (VV, VH) for all models
+                assert sar_batch.shape[1] == 2, f"Expected 2 SAR condition channels (VV, VH), got {sar_batch.shape[1]}"
 
-    with torch.no_grad():
-        for sar_batch, out_paths, crs_wkts, transforms in tqdm(loader, desc=f"Generating [{args.model}] fakes"):
-            sar_batch = sar_batch.to(device, non_blocking=True)
-            assert sar_batch.shape[1] == 2, f"Expected 2 SAR condition channels (VV, VH), got {sar_batch.shape[1]}"
+                if args.model in ("pix2pix", "cyclegan"):
+                    with torch.amp.autocast(device.type):
+                        fake_opt = generator(sar_batch)
+                elif args.model == "palette":
+                    # Palette runs in stable FP32 to prevent self-attention NaN overflow on T4
+                    fake_opt = palette_sample(generator, sar_batch, diffusion_params, device,
+                                              num_steps=args.inference_steps,
+                                              guidance_scale=args.guidance_scale)
 
-            if args.model in ("pix2pix", "cyclegan"):
-                with torch.amp.autocast(device.type):
-                    fake_opt = generator(sar_batch)
-            elif args.model == "palette":
-                # Palette runs in stable FP32 to prevent self-attention NaN overflow on T4
-                fake_opt = palette_sample(generator, sar_batch, diffusion_params, device,
-                                          num_steps=args.inference_steps,
-                                          guidance_scale=args.guidance_scale)
+                # Detect NaNs per image BEFORE clamping or nan_to_num conversion
+                has_nan = torch.isnan(fake_opt).flatten(1).any(dim=1)  # shape (B,) boolean
 
-            # Detect NaNs per image BEFORE clamping or nan_to_num conversion
-            has_nan = torch.isnan(fake_opt).flatten(1).any(dim=1)  # shape (B,) boolean
+                # NOTE: Both Pix2Pix and CycleGAN generators output values in [0.0, 1.0]
+                # (Pix2Pix trained with L1 against [0, 1] optical reflectance; CycleGAN uses Sigmoid).
+                # Palette explicitly maps back to [0.0, 1.0] at the end of palette_sample.
+                fake_opt_clean = torch.nan_to_num(fake_opt, nan=0.0, posinf=1.0, neginf=0.0)
+                fake_opt_np = (fake_opt_clean * 10000.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
 
-            # Clean remaining values safely
-            fake_opt_clean = torch.nan_to_num(fake_opt, nan=0.0, posinf=1.0, neginf=0.0)
-            fake_opt_np = (fake_opt_clean * 10000.0).clamp(0, 65535).cpu().numpy().astype(np.uint16)
+                save_tasks = []
+                for i in range(sar_batch.size(0)):
+                    if has_nan[i].item():
+                        corrupt_path = out_paths[i]
+                        if os.path.exists(corrupt_path):
+                            os.remove(corrupt_path)
+                        print(f"[WARN] Skipping NaN-corrupted patch: {os.path.basename(corrupt_path)}")
+                        continue
 
-            save_tasks = []
-            for i in range(sar_batch.size(0)):
-                if has_nan[i].item():
-                    corrupt_path = out_paths[i]
-                    if os.path.exists(corrupt_path):
-                        os.remove(corrupt_path)
-                    print(f"[WARN] Skipping NaN-corrupted patch: {os.path.basename(corrupt_path)}")
-                    continue
+                    save_tasks.append((
+                        fake_opt_np[i],
+                        out_paths[i],
+                        crs_wkts[i],
+                        transforms[i].tolist()
+                    ))
 
-                save_tasks.append((
-                    fake_opt_np[i],
-                    out_paths[i],
-                    crs_wkts[i],
-                    transforms[i].tolist()
-                ))
+                if save_tasks:
+                    try:
+                        list(writer_pool.map(_save_single_patch, save_tasks))
+                    except Exception as e:
+                        print(f"[ERROR] Failed writing batch GeoTIFFs: {e}")
+                        # Clean up any partial files from this failed batch so they are not treated as completed
+                        for _, out_p, _, _ in save_tasks:
+                            if os.path.exists(out_p):
+                                try:
+                                    os.remove(out_p)
+                                except OSError:
+                                    pass
+                        print("[WARN] Cleaned up partial files. Continuing next batch (unwritten patches will resume on re-run)...")
 
-            if save_tasks:
-                try:
-                    list(writer_pool.map(_save_single_patch, save_tasks))
-                except Exception as e:
-                    print(f"[ERROR] Failed writing batch GeoTIFFs: {e}")
-                    # Clean up any partial files from this failed batch so they are not treated as done
-                    for _, out_p, _, _ in save_tasks:
-                        if os.path.exists(out_p):
-                            try:
-                                os.remove(out_p)
-                            except OSError:
-                                pass
-                    raise e
-
-    writer_pool.shutdown()
     print(f"\nDone! All fake optical images saved to: {output_dir}")
 
 
