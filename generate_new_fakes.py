@@ -197,11 +197,11 @@ def get_diffusion_params(betas):
     }
 
 @torch.no_grad()
-def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50):
+def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50, guidance_scale=2.0):
     """
-    DDIM deterministic sampling (Song et al., 2020).
-    Mathematically valid for arbitrary step sizes with any DDPM-trained model.
-    No retraining needed. sigma=0 (fully deterministic, no stochastic noise added).
+    DDIM deterministic sampling with Classifier-Free Guidance (CFG).
+    Operates in [-1.0, 1.0] normalized diffusion space.
+    Maps final image to [0.0, 1.0] reflectance for saving.
     """
     b = sar.shape[0]
     img = torch.randn(b, 3, 256, 256, device=device)
@@ -212,19 +212,29 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50):
         timesteps.append(0)
 
     alphas_cumprod = diffusion_params['alphas_cumprod'].to(device)
+    null_sar = torch.zeros_like(sar)
 
     for idx, t_val in enumerate(timesteps):
         t = torch.full((b,), t_val, device=device, dtype=torch.long)
-        model_input = torch.cat([img, sar], dim=1)
 
-        # Predict noise at current timestep (FP32 for stability)
-        predicted_noise = model(model_input, t)
+        # CFG: evaluate conditioned and unconditioned branches
+        if guidance_scale > 1.0:
+            model_input = torch.cat([
+                torch.cat([img, sar], dim=1),
+                torch.cat([img, null_sar], dim=1)
+            ], dim=0)
+            t_both = torch.cat([t, t], dim=0)
+            pred_both = model(model_input, t_both)
+            pred_cond, pred_uncond = pred_both.chunk(2, dim=0)
+            predicted_noise = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+        else:
+            predicted_noise = model(torch.cat([img, sar], dim=1), t)
 
         alpha_t = alphas_cumprod[t_val]
 
-        # Step 1: Recover predicted clean image x_0 from noisy x_t
+        # Step 1: Recover predicted clean image x_0 in [-1.0, 1.0]
         pred_x0 = (img - torch.sqrt(1.0 - alpha_t) * predicted_noise) / torch.sqrt(alpha_t)
-        pred_x0 = pred_x0.clamp(0.0, 1.0)  # Stabilize: optical images are in [0, 1]
+        pred_x0 = pred_x0.clamp(-1.0, 1.0)
 
         if t_val == 0:
             img = pred_x0
@@ -234,7 +244,8 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50):
             alpha_t_prev = alphas_cumprod[t_prev_val]
             img = torch.sqrt(alpha_t_prev) * pred_x0 + torch.sqrt(1.0 - alpha_t_prev) * predicted_noise
 
-    return img.clamp(0.0, 1.0)
+    # Map [-1.0, 1.0] back to [0.0, 1.0] surface reflectance
+    return ((img + 1.0) / 2.0).clamp(0.0, 1.0)
 
 
 # ============================
@@ -242,7 +253,8 @@ def palette_sample(model, sar, diffusion_params, device, T=1000, num_steps=50):
 # ============================
 
 class TestSARDataset(Dataset):
-    def __init__(self, s1_paths, output_dir):
+    def __init__(self, s1_paths, output_dir, model_name=""):
+        self.model_name = model_name
         self.items = []
         for p in s1_paths:
             filename = os.path.basename(p)
@@ -258,6 +270,14 @@ class TestSARDataset(Dataset):
         s1_path, out_path = self.items[idx]
         with rasterio.open(s1_path) as src:
             sar = src.read().astype(np.float32)
+            # Palette requires SAR normalized to [-1.0, 1.0]
+            if self.model_name == "palette":
+                vv = np.clip(sar[0:1], -25.0, 0.0)
+                vh = np.clip(sar[1:2], -32.5, 0.0)
+                vv_norm = 2.0 * (vv - (-25.0)) / 25.0 - 1.0
+                vh_norm = 2.0 * (vh - (-32.5)) / 32.5 - 1.0
+                sar = np.concatenate([vv_norm, vh_norm], axis=0).astype(np.float32)
+
             crs_wkt = src.crs.to_wkt() if src.crs else ""
             transform = list(src.transform)[:6]
         return torch.from_numpy(sar), out_path, crs_wkt, torch.tensor(transform, dtype=torch.float64)
@@ -296,6 +316,8 @@ def main():
                         help="Batch size for parallel inference (default: 16).")
     parser.add_argument("--num-workers", type=int, default=8,
                         help="Number of DataLoader worker processes (default: 8).")
+    parser.add_argument("--guidance-scale", type=float, default=2.0,
+                        help="Classifier-Free Guidance (CFG) scale for Palette (default: 2.0).")
     args = parser.parse_args()
 
     # Default weight paths
@@ -313,13 +335,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Generating fake optical images using [{args.model.upper()}] on {device}")
     print(f"Loading weights from: {weights_path}")
-    print(f"Config: Batch Size = {args.batch_size}, Workers = {args.num_workers}, Palette Steps = {args.inference_steps}")
+    print(f"Config: Batch Size = {args.batch_size}, Workers = {args.num_workers}, Palette Steps = {args.inference_steps}, CFG Scale = {args.guidance_scale}")
 
     # Load test split
     with open("./splits/test_files.json", "r") as f:
         test_files = json.load(f)
 
-    dataset = TestSARDataset(test_files, output_dir)
+    dataset = TestSARDataset(test_files, output_dir, model_name=args.model)
     already_done = len(test_files) - len(dataset)
     print(f"Total test patches: {len(test_files)} | Already completed: {already_done} | Remaining to generate: {len(dataset)}")
 
@@ -341,12 +363,10 @@ def main():
         generator = GeneratorUNet(in_channels=2, out_channels=3).to(device)
         generator.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
         generator.eval()
-
     elif args.model == "cyclegan":
         generator = CycleGANGenerator(in_channels=2, out_channels=3).to(device)
         generator.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
         generator.eval()
-
     elif args.model == "palette":
         generator = PaletteUNet(in_channels=5, out_channels=3).to(device)
         generator.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
@@ -365,7 +385,8 @@ def main():
                     fake_opt = generator(sar_batch)
             elif args.model == "palette":
                 fake_opt = palette_sample(generator, sar_batch, diffusion_params, device,
-                                          num_steps=args.inference_steps)
+                                          num_steps=args.inference_steps,
+                                          guidance_scale=args.guidance_scale)
 
             # Guard against NaN/Inf from diffusion numerical instability
             # nan_to_num replaces NaN with 0 before we can detect and skip corrupted images

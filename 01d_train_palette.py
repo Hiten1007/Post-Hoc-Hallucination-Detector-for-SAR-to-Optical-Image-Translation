@@ -220,16 +220,24 @@ class SAR2OptDataset(Dataset):
         s1_path = self.sar_files[idx]
         s2_path = s1_path.replace('_s1_', '_s2_').replace('/s1_', '/s2_').replace('\\s1_', '\\s2_')
 
+        # 1. Normalize Sentinel-1 SAR dB to [-1.0, 1.0]
         with rasterio.open(s1_path) as src:
             sar = src.read().astype(np.float32)
+            vv = np.clip(sar[0:1], -25.0, 0.0)
+            vh = np.clip(sar[1:2], -32.5, 0.0)
+            vv_norm = 2.0 * (vv - (-25.0)) / 25.0 - 1.0
+            vh_norm = 2.0 * (vh - (-32.5)) / 32.5 - 1.0
+            sar_norm = np.concatenate([vv_norm, vh_norm], axis=0).astype(np.float32)
 
+        # 2. Normalize Sentinel-2 Surface Reflectance [0, 10000] to [-1.0, 1.0]
         with rasterio.open(s2_path) as src:
             opt = src.read()
             if opt.shape[0] >= 3:
                 opt = opt[[3, 2, 1], :, :] if opt.shape[0] == 13 else opt[:3, :, :]
-            opt = opt.astype(np.float32) / 10000.0
+            opt_scaled = (opt.astype(np.float32) / 10000.0) * 2.0 - 1.0
+            opt_norm = np.clip(opt_scaled, -1.0, 1.0).astype(np.float32)
 
-        return torch.from_numpy(sar), torch.from_numpy(opt)
+        return torch.from_numpy(sar_norm), torch.from_numpy(opt_norm)
 
 
 # ============================
@@ -253,42 +261,53 @@ def q_sample(x_start, t, diffusion_params, noise=None):
 # ============================
 
 @torch.no_grad()
-def p_sample_loop(model, sar_condition, diffusion_params, device, num_steps=None):
+def p_sample_loop(model, sar_condition, diffusion_params, device, num_steps=25, guidance_scale=2.0):
     """
-    Iterative denoising from pure noise to a clean optical image.
-    Uses DDPM sampling with optional step skipping for faster inference.
+    DDIM deterministic sampling with Classifier-Free Guidance (CFG).
+    Operates stably in [-1.0, 1.0] space.
     """
     b = sar_condition.shape[0]
-    img = torch.randn(b, 3, 256, 256, device=device)  # Start from pure noise
+    img = torch.randn(b, 3, 256, 256, device=device)
+    T = len(diffusion_params['alphas_cumprod'])
 
-    timesteps = list(range(T - 1, -1, -1))
-    if num_steps is not None and num_steps < T:
-        # Evenly spaced subset of timesteps for faster inference
-        step_size = T // num_steps
-        timesteps = list(range(T - 1, -1, -step_size))
+    step_size = max(1, T // num_steps)
+    timesteps = list(range(T - 1, -1, -step_size))
+    if timesteps[-1] != 0:
+        timesteps.append(0)
 
-    for t_val in timesteps:
+    alphas_cumprod = diffusion_params['alphas_cumprod'].to(device)
+    null_sar = torch.zeros_like(sar_condition)
+
+    for idx, t_val in enumerate(timesteps):
         t = torch.full((b,), t_val, device=device, dtype=torch.long)
 
-        # Concatenate SAR condition with noisy image
-        model_input = torch.cat([img, sar_condition], dim=1)
-        predicted_noise = model(model_input, t)
-
-        # DDPM update step
-        betas_t = diffusion_params['betas'][t_val].to(device)
-        sqrt_one_minus_t = diffusion_params['sqrt_one_minus_alphas_cumprod'][t_val].to(device)
-        sqrt_recip_t = diffusion_params['sqrt_recip_alphas'][t_val].to(device)
-
-        model_mean = sqrt_recip_t * (img - betas_t / sqrt_one_minus_t * predicted_noise)
-
-        if t_val > 0:
-            posterior_var = diffusion_params['posterior_variance'][t_val].to(device)
-            noise = torch.randn_like(img)
-            img = model_mean + torch.sqrt(posterior_var) * noise
+        # CFG: predict conditional and unconditional noise
+        if guidance_scale > 1.0:
+            model_input = torch.cat([
+                torch.cat([img, sar_condition], dim=1),
+                torch.cat([img, null_sar], dim=1)
+            ], dim=0)
+            t_both = torch.cat([t, t], dim=0)
+            pred_both = model(model_input, t_both)
+            pred_cond, pred_uncond = pred_both.chunk(2, dim=0)
+            predicted_noise = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
         else:
-            img = model_mean
+            predicted_noise = model(torch.cat([img, sar_condition], dim=1), t)
 
-    return img.clamp(0, 1)
+        alpha_t = alphas_cumprod[t_val]
+
+        # Predicted clean image x_0 in [-1.0, 1.0]
+        pred_x0 = (img - torch.sqrt(1.0 - alpha_t) * predicted_noise) / torch.sqrt(alpha_t)
+        pred_x0 = pred_x0.clamp(-1.0, 1.0)
+
+        if t_val == 0:
+            img = pred_x0
+        else:
+            t_prev_val = timesteps[idx + 1] if idx + 1 < len(timesteps) else 0
+            alpha_t_prev = alphas_cumprod[t_prev_val]
+            img = torch.sqrt(alpha_t_prev) * pred_x0 + torch.sqrt(1.0 - alpha_t_prev) * predicted_noise
+
+    return img.clamp(-1.0, 1.0)
 
 
 # ============================
@@ -296,15 +315,22 @@ def p_sample_loop(model, sar_condition, diffusion_params, device, num_steps=None
 # ============================
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Train Palette with Proper Normalization & CFG")
+    parser.add_argument("--epochs", type=int, default=EPOCHS, help="Total epochs")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
+    parser.add_argument("--resume", action="store_true", help="Resume from existing checkpoint")
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Starting Palette (Conditional DDPM) Training on {device}")
+    logging.info(f"Starting Palette (Conditional DDPM) Training on {device} with [-1, 1] Normalization & CFG")
 
     train_dataset = SAR2OptDataset(TRAIN_SPLIT_JSON)
     val_dataset = SAR2OptDataset(VAL_SPLIT_JSON)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               num_workers=4, pin_memory=True, prefetch_factor=2, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                             num_workers=4, pin_memory=True)
 
     # Initialize model: input = [noisy_optical(3) + sar(2)] = 5 channels, output = predicted noise (3 channels)
@@ -318,8 +344,8 @@ def main():
 
     start_epoch = 0
 
-    # SAFE RESUME LOGIC
-    if os.path.exists(CHECKPOINT_FILE):
+    # SAFE RESUME LOGIC (Backs up legacy checkpoint if starting fresh)
+    if args.resume and os.path.exists(CHECKPOINT_FILE):
         logging.info(f"Found checkpoint {CHECKPOINT_FILE}. Restoring ALL states to safely resume...")
         ckpt = torch.load(CHECKPOINT_FILE, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model'])
@@ -327,14 +353,20 @@ def main():
         scaler.load_state_dict(ckpt['scaler'])
         start_epoch = ckpt['epoch'] + 1
         logging.info(f"Resuming from Epoch {start_epoch + 1}")
+    elif os.path.exists(CHECKPOINT_FILE) and not args.resume:
+        legacy_backup = "palette_checkpoint_legacy.pth"
+        logging.info(f"Starting FRESH run. Backing up legacy checkpoint {CHECKPOINT_FILE} -> {legacy_backup}")
+        if os.path.exists(legacy_backup):
+            os.remove(legacy_backup)
+        os.rename(CHECKPOINT_FILE, legacy_backup)
 
     best_val_loss = float('inf')
 
-    for epoch in range(start_epoch, EPOCHS):
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
         for sar, real_opt in pbar:
             sar = sar.to(device, non_blocking=True)
             real_opt = real_opt.to(device, non_blocking=True)
@@ -342,16 +374,20 @@ def main():
             # Sample random timesteps for each image in the batch
             t = torch.randint(0, T, (sar.size(0),), device=device).long()
 
-            # Add noise to the real optical image (forward diffusion)
+            # Add noise to the real optical image (forward diffusion in [-1, 1] space)
             noise = torch.randn_like(real_opt)
             noisy_opt = q_sample(real_opt, t, diffusion_params, noise)
 
-            # Concatenate SAR condition with noisy optical
-            model_input = torch.cat([noisy_opt, sar], dim=1)
+            # CFG: 10% condition dropout during training
+            if torch.rand(1).item() < 0.10:
+                sar_input = torch.zeros_like(sar)
+            else:
+                sar_input = sar
+
+            model_input = torch.cat([noisy_opt, sar_input], dim=1)
 
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast('cuda'):
-                # Model predicts the noise that was added
                 predicted_noise = model(model_input, t)
                 loss = F.mse_loss(predicted_noise, noise)
 
@@ -365,7 +401,7 @@ def main():
         avg_loss = total_loss / len(train_loader)
         logging.info(f"Epoch {epoch + 1} Complete. Average MSE Loss: {avg_loss:.6f}")
 
-        # --- Generate Validation Visual Progress ---
+        # --- Generate Validation Visual Progress with Guided DDIM ---
         model.eval()
         with torch.no_grad():
             for i, (sar, real_opt) in enumerate(val_loader):
@@ -374,10 +410,14 @@ def main():
                 sar = sar.to(device)
                 real_opt = real_opt.to(device)
 
-                # Generate fake optical images from SAR via reverse diffusion
-                fake_opt = p_sample_loop(model, sar[:4], diffusion_params, device, num_steps=INFERENCE_STEPS)
+                # Generate fake optical images via Guided DDIM (25 steps, CFG scale 2.0)
+                fake_opt = p_sample_loop(model, sar[:4], diffusion_params, device, num_steps=25, guidance_scale=2.0)
 
-                img_sample = torch.cat((real_opt.data[:4], fake_opt.data[:4]), -2)
+                # Rescale from [-1.0, 1.0] to [0.0, 1.0] for saving
+                real_vis = ((real_opt[:4] + 1.0) / 2.0).clamp(0.0, 1.0)
+                fake_vis = ((fake_opt + 1.0) / 2.0).clamp(0.0, 1.0)
+
+                img_sample = torch.cat((real_vis.data, fake_vis.data), -2)
                 save_image(img_sample, OUTPUT_IMAGES / f"epoch_{epoch + 1}.png", nrow=4, normalize=False)
 
         # --- SAVE CHECKPOINT ---
