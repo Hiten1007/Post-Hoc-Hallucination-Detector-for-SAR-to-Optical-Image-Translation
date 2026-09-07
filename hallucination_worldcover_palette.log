@@ -1,0 +1,48 @@
+2026-09-07 06:49:56,935 - Starting WorldCover Hallucination Audit on cuda for model: [PALETTE]
+2026-09-07 06:49:56,935 - Using 10m WorldCover ground truth (11 classes)
+2026-09-07 06:49:56,935 - Config: Batch Size = 16, Workers = 8
+2026-09-07 06:49:56,935 - Applying Double-Condition Filter with 2-pixel morphological boundary exclusion.
+2026-09-07 06:49:58,851 - Total auditable test patches found: 19083
+2026-09-07 06:55:15,901 - 
+=======================================================
+2026-09-07 06:55:15,901 -   WORLDCOVER 10m HALLUCINATION BENCHMARK
+2026-09-07 06:55:15,902 - =======================================================
+2026-09-07 06:55:15,913 - 
+ Class ID  Land Cover Type  Total GT Pixels  Detector Baseline Acc (%)  Valid Audited Pixels  Hallucinated Pixels  Hallucination Rate (%)
+        0       Tree Cover        283791590                      95.65             271454745            271454745                  100.00
+        1        Shrubland          7554566                      36.34               2745677              2745677                  100.00
+        2        Grassland        140951570                      53.02              74725764             74725764                  100.00
+        3         Cropland         94775850                      81.92              77641495             77641495                  100.00
+        4 Urban / Built-up         48410601                      97.04              46978507             46978507                  100.00
+        5           Barren         62793862                      58.61              36800407             36599387                   99.45
+        6     Snow and Ice                0                       0.00                     0                    0                    0.00
+        7     Water Bodies        136605364                      92.18             125928869               737444                    0.59
+        8         Wetlands         10195819                      36.37               3707785              3707785                  100.00
+        9        Mangroves           187458                       0.01                    27                   27                  100.00
+       10  Moss and Lichen          4639191                       0.00                     0                    0                    0.00
+2026-09-07 06:55:15,913 - 
+Audit complete! Benchmark saved to hallucination_benchmark_worldcover_palette.csv
+2026-09-07 20:59:19,299 - Starting WorldCover Hallucination Audit on cuda for model: [PALETTE]
+2026-09-07 20:59:19,300 - Using 10m WorldCover ground truth (11 classes)
+2026-09-07 20:59:19,300 - Config: Batch Size = 16, Workers = 8
+2026-09-07 20:59:19,300 - Applying Double-Condition Filter with 2-pixel morphological boundary exclusion.
+2026-09-07 20:59:21,300 - Total auditable test patches found: 19083
+2026-09-07 21:04:37,068 - 
+=======================================================
+2026-09-07 21:04:37,070 -   WORLDCOVER 10m HALLUCINATION BENCHMARK
+2026-09-07 21:04:37,070 - =======================================================
+2026-09-07 21:04:37,081 - 
+ Class ID  Land Cover Type  Total GT Pixels  Detector Baseline Acc (%)  Valid Audited Pixels  Hallucinated Pixels  Hallucination Rate (%)
+        0       Tree Cover        283791590                      95.65             271454745            271454745                  100.00
+        1        Shrubland          7554566                      36.34               2745677              2745677                  100.00
+        2        Grassland        140951570                      53.02              74725764             74725764                  100.00
+        3         Cropland         94775850                      81.92              77641495             77641495                  100.00
+        4 Urban / Built-up         48410601                      97.04              46978507             46978501                  100.00
+        5           Barren         62793862                      58.61              36800407             36597692                   99.45
+        6     Snow and Ice                0                       0.00                     0                    0                    0.00
+        7     Water Bodies        136605364                      92.18             125928869               745700                    0.59
+        8         Wetlands         10195819                      36.37               3707785              3707785                  100.00
+        9        Mangroves           187458                       0.01                    27                   27                  100.00
+       10  Moss and Lichen          4639191                       0.00                     0                    0                    0.00
+2026-09-07 21:04:37,081 - 
+Audit complete! Benchmark saved to hallucination_benchmark_worldcover_palette.csv
